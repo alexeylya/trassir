@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TRASSIR - Видео и ActivePOS</title>
+  
+  <!-- JSMpeg для декодирования MPEG-TS видеопотока -->
+  <script>
+    window.__loadLocalJSMpeg = function(reason) {
+      if (window.__jsmpegFallbackRequested) return;
+      window.__jsmpegFallbackRequested = true;
+      console.warn('⚠️ Загрузка JSMpeg с CDN не удалась, пробуем локальный fallback.', reason || '');
+      var script = document.createElement('script');
+      script.src = '/node_modules/jsmpeg/jsmpg.js';
+      script.onload = function() {
+        window.__jsmpegLoadedFrom = 'local';
+        console.log('✅ Локальная версия JSMpeg загружена');
+      };
+      script.onerror = function(err) {
+        console.error('❌ Не удалось загрузить JSMpeg ни с CDN, ни локально', err);
+      };
+      document.head.appendChild(script);
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/gh/phoboslab/jsmpeg@master/jsmpeg.min.js"
+          onload="window.__jsmpegLoadedFrom='cdn';"
+          onerror="window.__loadLocalJSMpeg && window.__loadLocalJSMpeg(event);"></script>
+  <script>
+    if (typeof JSMpeg === 'undefined') {
+      window.addEventListener('load', function() {
+        if (typeof JSMpeg === 'undefined' && !window.__jsmpegLoadedFrom) {
+          window.__loadLocalJSMpeg && window.__loadLocalJSMpeg('JSMpeg не определен после загрузки страницы');
+        }
+      });
+    }
+  </script>
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #4a9eff;
+    }
+    select {
+      padding: 10px;
+      margin: 5px;
+      background: #1a1a1a;
+      border: 1px solid #555;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+    canvas {
+      background: #000;
+      border: 2px solid #555;
+      border-radius: 4px;
+      max-width: 100%;
+      display: block;
+      margin: 10px auto;
+    }
+    .live-layout {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .video-wrapper {
+      flex: 2 1 520px;
+      min-width: 320px;
+    }
+    .pos-panel {
+      flex: 1 1 300px;
+      min-width: 280px;
+      background: #1a1a1a;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 16px;
+      max-height: 520px;
+      display: flex;
+      flex-direction: column;
+    }
+    .pos-panel h3 {
+      font-size: 16px;
+      margin-bottom: 10px;
+      color: #4a9eff;
+    }
+    .pos-status {
+      font-size: 13px;
+      color: #a0a0a0;
+      margin-bottom: 10px;
+    }
+    .pos-status.muted {
+      color: #6f6f6f;
+    }
+    .pos-status.success {
+      color: #7cd67c;
+    }
+    .pos-status.error {
+      color: #ff867c;
+    }
+    .pos-events-list {
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 4px;
+    }
+    .pos-terminal {
+      background: #1d1d1d;
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pos-terminal-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .pos-terminal-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #f5f5f5;
+    }
+    .pos-terminal-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 12px;
+      color: #9e9e9e;
+    }
+    .pos-terminal-meta span strong {
+      color: #d7d7d7;
+    }
+    .pos-terminal-events {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .pos-terminal-empty {
+      color: #777;
+      font-size: 12px;
+      text-align: center;
+      padding: 8px 0;
+    }
+    .pos-empty {
+      color: #777;
+      font-size: 13px;
+      text-align: center;
+      margin-top: 20px;
+    }
+    .pos-event {
+      background: #262626;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      padding: 10px;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .pos-event-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      font-weight: 600;
+    }
+    .pos-event-time {
+      color: #8f8f8f;
+      font-size: 12px;
+    }
+    .pos-event-type {
+      font-size: 13px;
+      color: #f3f3f3;
+    }
+    .pos-event-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: #bdbdbd;
+      font-size: 12px;
+    }
+    .pos-event-text {
+      background: #1d1d1d;
+      border-radius: 4px;
+      padding: 8px;
+      color: #d7d7d7;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .pos-event strong {
+      color: #e0e0e0;
+    }
+    .error {
+      background: #d32f2f;
+      color: #fff;
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TRASSIR - Видео и ActivePOS</h1>
+    
+    <select id="cameraSelect">
+      <option value="">Загрузка камер...</option>
+    </select>
+    
+    <div class="live-layout">
+      <div class="video-wrapper">
+        <canvas id="videoCanvas" width="640" height="360"></canvas>
+        <div id="videoStatus"></div>
+      </div>
+      
+      <div class="pos-panel">
+        <h3>ActivePOS</h3>
+        <div id="posEventsStatus" class="pos-status">Выберите камеру, чтобы увидеть чек в реальном времени</div>
+        <select id="posTerminalSelect">
+          <option value="">Все кассы</option>
+        </select>
+        <div id="posEventsList" class="pos-events-list">
+          <div class="pos-empty">Данные ActivePOS пока не получены</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Словарь переводов типов событий ActivePOS
+    const EVENT_LABELS = {
+      POSNG_RECEIPT_OPEN: 'Начало чека',
+      POSNG_RECEIPT_NUMBER: 'Номер чека',
+      POSNG_POSITION_ADD: 'Позиция',
+      POSNG_POSITION_ADD_BY_BARCODE_MANUALLY: 'Позиция (ввод вручную)',
+      POSNG_POSITION_ADD_BY_BARCODE: 'Позиция (по штрихкоду)',
+      POSNG_PAYMENT_CASH: 'Оплата наличными',
+      POSNG_PAYMENT_CASHLESS: 'Расчёт безналичный',
+      POSNG_PAYMENT_PREPAYMENT: 'Предоплата',
+      POSNG_PAYMENT_CREDIT_CARD: 'Оплата по кредитной карте',
+      POSNG_PAYMENT_DISCOUNT_CARD: 'Скидка / карта покупателя',
+      POSNG_PAYMENT_CERTIFICATE: 'Оплата сертификатом',
+      POSNG_PAYMENT_BONUS: 'Оплата бонусами',
+      POSNG_PAYMENT_CLOSE: 'Оплата завершена',
+      POSNG_RECEIPT_PRELIMINARY_RESULT_CASHLESS: 'Подитог по безналичному расчёту',
+      POSNG_RECEIPT_PRELIMINARY_RESULT_CASH: 'Подитог наличными',
+      POSNG_RECEIPT_SELL_CLOSE: 'Конец чека "Продажа"',
+      POSNG_RECEIPT_PRINT: 'Печать чека',
+      POSNG_RECEIPT_CANCEL: 'Отмена чека',
+      POSNG_RECEIPT_RETURN_OPEN: 'Начало чека "Возврат"',
+      POSNG_RECEIPT_RETURN_CLOSE: 'Конец чека "Возврат"',
+      POSNG_ERROR_POSITION_NOT_FOUND_BY_BARCODE: 'Товар по штрихкоду не найден',
+      POSNG_ERROR_DUPLICATE_POSITION: 'Дублирование позиции',
+      POSNG_ERROR_GENERAL: 'Ошибка',
+      POSNG_PAYMENT_CREDIT: 'Оплата в кредит',
+      POSNG_PAYMENT_OTHER: 'Прочая оплата'
+    };
+
+    function translateEventType(type) {
+      if (!type) return 'Событие';
+      return EVENT_LABELS[type] || type;
+    }
+
+    // Глобальные переменные
+    let ws = null;
+    let currentCameraGuid = null;
+    let jsmpegPlayer = null;
+    const posEventsByTerminal = new Map();
+    let posSubscriptionParams = null;
+    const POS_EVENT_LIMIT_PER_CHECK = 30;
+    const POS_CHECK_LIMIT_PER_TERMINAL = 10;
+    let selectedPosTerminal = '';
+    let posTerminalSelectEl = null;
+
+    // Остановка видеоплеера
+    function stopVideoPlayer() {
+      if (jsmpegPlayer && typeof jsmpegPlayer.destroy === 'function') {
+        try {
+          jsmpegPlayer.destroy();
+        } catch (error) {
+          console.warn('⚠️ Ошибка остановки JSMpeg:', error);
+        }
+      }
+      jsmpegPlayer = null;
+    }
+
+    // Запуск видеоплеера
+    function startVideoPlayer(streamInfo) {
+      const canvas = document.getElementById('videoCanvas');
+      const status = document.getElementById('videoStatus');
+
+      const JSMpegLib = typeof JSMpeg !== 'undefined' ? JSMpeg : (typeof window.JSMpeg !== 'undefined' ? window.JSMpeg : null);
+      if (!JSMpegLib || typeof JSMpegLib.Player !== 'function') {
+        console.error('❌ JSMpeg.Player недоступен');
+        stopVideoPlayer();
+        status.textContent = 'Видео недоступно (JSMpeg не загружен)';
+        status.className = 'error';
+        return;
+      }
+
+      stopVideoPlayer();
+
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const hostname = window.location.hostname;
+      const portPart = streamInfo.wsPort !== undefined && streamInfo.wsPort !== null
+        ? `:${streamInfo.wsPort}`
+        : (window.location.port ? `:${window.location.port}` : '');
+      const videoUrl = `${protocol}://${hostname}${portPart}/?streamId=${encodeURIComponent(streamInfo.streamId)}`;
+
+      const baseOptions = {
+        canvas,
+        audio: false,
+        autoplay: true,
+        streaming: true
+      };
+
+      try {
+        jsmpegPlayer = new JSMpegLib.Player(videoUrl, baseOptions);
+        status.textContent = 'Видеопоток активен';
+        status.className = '';
+        console.log('✅ Подключение JSMpeg к', videoUrl);
+      } catch (error) {
+        const needCanvasFallback = /webgl/i.test(error?.message || '') || /WebGLRenderer/i.test(error?.stack || '');
+        if (needCanvasFallback) {
+          console.warn('⚠️ WebGL недоступен, пробуем Canvas renderer');
+          try {
+            if (JSMpegLib?.Renderer?.WebGL) {
+              JSMpegLib.Renderer.WebGL.IsSupported = () => false;
+            }
+            jsmpegPlayer = new JSMpegLib.Player(videoUrl, { ...baseOptions, disableGl: true });
+            status.textContent = 'Видеопоток активен (Canvas)';
+            status.className = '';
+            return;
+          } catch (fallbackError) {
+            console.error('❌ Ошибка Canvas renderer:', fallbackError);
+          }
+        } else {
+          console.error('❌ Ошибка инициализации JSMpeg Player:', error);
+        }
+
+        stopVideoPlayer();
+        status.textContent = 'Не удалось запустить видеопоток';
+        status.className = 'error';
+      }
+    }
+
+    // Экранирование HTML
+    function escapeHtml(value) {
+      if (value === null || value === undefined) return '';
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Форматирование чисел
+    function formatPosNumber(value, options = {}) {
+      if (value === null || value === undefined || value === '') return '—';
+      const num = Number(value);
+      if (Number.isFinite(num)) {
+        return num.toLocaleString('ru-RU', options);
+      }
+      return String(value);
+    }
+
+    // Форматирование валюты
+    function formatPosCurrency(value) {
+      if (value === null || value === undefined || value === '') return '—';
+      const num = Number(value);
+      if (Number.isFinite(num)) {
+        const scaled = num / 100;
+        return scaled.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽';
+      }
+      return String(value);
+    }
+
+    // Форматирование времени
+    function formatTimestampUs(value) {
+      if (value === null || value === undefined || value === '' || value === 0 || value === '0') return '—';
+      const num = Number(value);
+      if (!Number.isFinite(num)) return String(value);
+      const date = new Date(num / 1000);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString('ru-RU');
+    }
+
+    // Установка статуса ActivePOS
+    function setPosStatus(message, tone = '') {
+      const el = document.getElementById('posEventsStatus');
+      if (!el) return;
+      el.textContent = message || '';
+      el.className = `pos-status${tone ? ` ${tone}` : ''}`;
+    }
+
+    // Сброс событий ActivePOS
+    function resetPosEvents() {
+      posEventsByTerminal.clear();
+      selectedPosTerminal = '';
+      updatePosTerminalSelectOptions();
+      renderPosEvents();
+    }
+
+    // Получение количества активных терминалов
+    function getActiveTerminalCount() {
+      let count = 0;
+      posEventsByTerminal.forEach(record => {
+        if (record?.checks instanceof Map) {
+          const hasChecks = Array.from(record.checks.values())
+            .some(check => check?.events instanceof Map && check.events.size > 0);
+          if (hasChecks) count += 1;
+        }
+      });
+      return count;
+    }
+
+    // Обновление списка терминалов в селекте
+    function updatePosTerminalSelectOptions() {
+      if (!posTerminalSelectEl) {
+        posTerminalSelectEl = document.getElementById('posTerminalSelect');
+      }
+      if (!posTerminalSelectEl) return;
+
+      const terminals = Array.from(posEventsByTerminal.entries())
+        .filter(([, record]) => record?.checks instanceof Map && Array.from(record.checks.values())
+          .some(check => check?.events instanceof Map && check.events.size > 0))
+        .map(([terminalId, record]) => ({
+          terminalId,
+          name: record.name || terminalId
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+      const selectionStillValid = selectedPosTerminal
+        ? terminals.some(item => item.terminalId === selectedPosTerminal)
+        : true;
+
+      let optionsHtml = '<option value="">Все кассы</option>';
+      optionsHtml += terminals
+        .map(item => `<option value="${escapeHtml(item.terminalId)}">${escapeHtml(item.name)}</option>`)
+        .join('');
+
+      posTerminalSelectEl.innerHTML = optionsHtml;
+
+      if (selectionStillValid && selectedPosTerminal) {
+        posTerminalSelectEl.value = selectedPosTerminal;
+      } else {
+        selectedPosTerminal = '';
+        posTerminalSelectEl.value = '';
+      }
+    }
+
+    // Обновление событий ActivePOS
+    function updatePosEvents(incomingEvents = []) {
+      let hasChanges = false;
+
+      for (const event of incomingEvents) {
+        if (!event || typeof event !== 'object') continue;
+        
+        const terminalId = event.pos_terminal || event.terminal || event.terminal_guid || event.pos_terminal_id;
+        if (!terminalId) continue;
+        
+        const terminalName = event.pos_terminal_name || event.terminal_name || terminalId;
+        let record = posEventsByTerminal.get(terminalId);
+        if (!record) {
+          record = { name: terminalName, checks: new Map() };
+          posEventsByTerminal.set(terminalId, record);
+        } else if (terminalName && terminalName !== record.name) {
+          record.name = terminalName;
+        }
+
+        const opId = event.op_id || `${terminalId}-${event.receipt_timestamp || event.event_timestamp || ''}`;
+        if (!opId) continue;
+
+        let check = record.checks.get(opId);
+        if (!check) {
+          check = {
+            id: opId,
+            events: new Map(),
+            latestTs: 0,
+            receiptTs: 0
+          };
+          record.checks.set(opId, check);
+        }
+
+        const dedupKey = [
+          event.event_timestamp ?? event.timestamp ?? '',
+          event.type ?? '',
+          event.position ?? '',
+          event.price ?? '',
+          event.quantity ?? '',
+          event.text ?? ''
+        ].join('|');
+
+        const canonicalTimestamp = Number(event.event_timestamp || event.timestamp || 0);
+        const receiptTs = Number(event.receipt_timestamp || 0);
+        const stored = check.events.get(dedupKey);
+        if (stored) {
+          check.events.set(dedupKey, { ...stored, ...event, __ts: canonicalTimestamp });
+        } else {
+          check.events.set(dedupKey, { ...event, __ts: canonicalTimestamp });
+          hasChanges = true;
+        }
+
+        if (Number.isFinite(canonicalTimestamp)) {
+          check.latestTs = Math.max(check.latestTs || 0, canonicalTimestamp);
+        }
+        if (Number.isFinite(receiptTs)) {
+          check.receiptTs = Math.max(check.receiptTs || 0, receiptTs);
+        }
+
+        // Ограничение количества событий на чек
+        if (check.events.size > POS_EVENT_LIMIT_PER_CHECK * 4) {
+          const trimmed = Array.from(check.events.entries())
+            .sort((a, b) => (Number(b[1].__ts) || 0) - (Number(a[1].__ts) || 0))
+            .slice(0, POS_EVENT_LIMIT_PER_CHECK);
+          check.events = new Map(trimmed);
+        }
+
+        // Ограничение количества чеков на терминал
+        if (record.checks.size > POS_CHECK_LIMIT_PER_TERMINAL * 4) {
+          const trimmedChecks = Array.from(record.checks.entries())
+            .sort((a, b) => (Number(b[1].latestTs) || 0) - (Number(a[1].latestTs) || 0))
+            .slice(0, POS_CHECK_LIMIT_PER_TERMINAL);
+          record.checks = new Map(trimmedChecks);
+        }
+      }
+
+      if (hasChanges) {
+        updatePosTerminalSelectOptions();
+        renderPosEvents();
+      }
+
+      return hasChanges;
+    }
+
+    // Отрисовка событий ActivePOS
+    function renderPosEvents() {
+      const list = document.getElementById('posEventsList');
+      if (!list) return;
+
+      const terminalsRaw = Array.from(posEventsByTerminal.entries())
+        .map(([terminalId, record]) => {
+          const checks = Array.from(record.checks.values())
+            .map(check => {
+              const events = Array.from(check.events.values())
+                .sort((a, b) => (Number(b.__ts) || 0) - (Number(a.__ts) || 0))
+                .slice(0, POS_EVENT_LIMIT_PER_CHECK);
+              return {
+                id: check.id,
+                events,
+                latestTs: check.latestTs || (events[0]?.__ts || 0),
+                receiptTs: check.receiptTs || 0
+              };
+            })
+            .filter(check => check.events.length > 0)
+            .sort((a, b) => (Number(b.latestTs) || 0) - (Number(a.latestTs) || 0))
+            .slice(0, POS_CHECK_LIMIT_PER_TERMINAL);
+          return {
+            terminalId,
+            name: record.name || terminalId,
+            checks
+          };
+        })
+        .filter(item => item.checks.length > 0)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+      let terminals = terminalsRaw;
+      if (selectedPosTerminal) {
+        terminals = terminalsRaw.filter(item => item.terminalId === selectedPosTerminal);
+      }
+
+      if (!terminals.length) {
+        if (selectedPosTerminal && terminalsRaw.length > 0) {
+          list.innerHTML = '<div class="pos-empty">Для выбранной кассы пока нет событий</div>';
+        } else {
+          list.innerHTML = '<div class="pos-empty">Данные ActivePOS пока не получены</div>';
+        }
+        return;
+      }
+
+      const html = terminals.map(({ terminalId, name, checks }) => {
+        const totalChecks = checks.length;
+        const latestCheckTs = checks[0]?.latestTs || null;
+        const totalAmount = checks.reduce((sum, check) => {
+          return sum + check.events.reduce((acc, event) => {
+            const price = Number(event?.price);
+            return Number.isFinite(price) ? acc + price : acc;
+          }, 0);
+        }, 0);
+
+        const headerMeta = [
+          `<span>ID: <strong>${escapeHtml(terminalId)}</strong></span>`,
+          `<span>Чеки: <strong>${totalChecks}</strong></span>`
+        ];
+        if (totalAmount) {
+          headerMeta.push(`<span>Сумма: <strong>${escapeHtml(formatPosCurrency(totalAmount))}</strong></span>`);
+        }
+        if (latestCheckTs) {
+          headerMeta.push(`<span>Обновлено: <strong>${escapeHtml(formatTimestampUs(latestCheckTs))}</strong></span>`);
+        }
+
+        const checksHtml = checks.map(check => {
+          const events = check.events;
+          const checkTotal = events.reduce((sum, event) => {
+            const price = Number(event?.price);
+            return Number.isFinite(price) ? sum + price : sum;
+          }, 0);
+          const checkQty = events.reduce((sum, event) => {
+            const qty = Number(event?.quantity);
+            return Number.isFinite(qty) ? sum + qty : sum;
+          }, 0);
+
+          const checkMeta = [
+            `<span>op_id: <strong>${escapeHtml(check.id)}</strong></span>`,
+            `<span>Событий: <strong>${events.length}</strong></span>`
+          ];
+          if (check.receiptTs) {
+            checkMeta.push(`<span>Чек: <strong>${escapeHtml(formatTimestampUs(check.receiptTs))}</strong></span>`);
+          }
+          if (checkTotal) {
+            checkMeta.push(`<span>Сумма: <strong>${escapeHtml(formatPosCurrency(checkTotal))}</strong></span>`);
+          }
+          if (checkQty) {
+            checkMeta.push(`<span>Количество: <strong>${escapeHtml(formatPosNumber(checkQty))}</strong></span>`);
+          }
+
+          const eventsHtml = events.map(event => {
+            const eventTime = escapeHtml(formatTimestampUs(event.event_timestamp));
+            const type = escapeHtml(translateEventType(event.type));
+            const flags = escapeHtml(event.flags ?? '—');
+            const position = escapeHtml(formatPosNumber(event.position));
+            const quantity = escapeHtml(formatPosNumber(event.quantity, { maximumFractionDigits: 2 }));
+            const price = escapeHtml(formatPosCurrency(event.price));
+            const weight = escapeHtml(formatPosNumber(event.weight, { maximumFractionDigits: 3 }));
+            const text = event.text ? `<div class="pos-event-text">${escapeHtml(event.text)}</div>` : '';
+
+            const metaItems = [
+              `<span>Позиция: <strong>${position}</strong></span>`,
+              `<span>Кол-во: <strong>${quantity}</strong></span>`,
+              `<span>Сумма: <strong>${price}</strong></span>`,
+              `<span>Вес: <strong>${weight}</strong></span>`
+            ];
+            if (flags && flags !== '0' && flags !== '—') {
+              metaItems.push(`<span>Флаги: <strong>${flags}</strong></span>`);
+            }
+
+            return `
+              <div class="pos-event">
+                <div class="pos-event-header">
+                  <span class="pos-event-time">${eventTime}</span>
+                  <span class="pos-event-type">${type}</span>
+                </div>
+                <div class="pos-event-meta">
+                  ${metaItems.join('')}
+                </div>
+                ${text}
+              </div>
+            `;
+          }).join('');
+
+          return `
+            <div class="pos-terminal">
+              <div class="pos-terminal-header">
+                <div class="pos-terminal-title">Чек ${escapeHtml(check.id)}</div>
+                <div class="pos-terminal-meta">${checkMeta.join('')}</div>
+              </div>
+              <div class="pos-terminal-events">
+                ${eventsHtml || '<div class="pos-terminal-empty">Нет событий</div>'}
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="pos-terminal">
+            <div class="pos-terminal-header">
+              <div class="pos-terminal-title">${escapeHtml(name)}</div>
+              <div class="pos-terminal-meta">${headerMeta.join('')}</div>
+            </div>
+            <div class="pos-terminal-events">
+              ${checksHtml || '<div class="pos-terminal-empty">Чеки не найдены</div>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      list.innerHTML = html;
+      list.scrollTop = 0;
+    }
+
+    // Подписка на события ActivePOS
+    function subscribePosEvents(channelGuid, { preserveHistory = false } = {}) {
+      if (!channelGuid) {
+        unsubscribePosEvents();
+        return;
+      }
+
+      const isSameChannel = posSubscriptionParams?.channel === channelGuid;
+      const nextParams = {
+        dedup_timeout_sec: 3,
+        ...posSubscriptionParams,
+        channel: channelGuid
+      };
+      posSubscriptionParams = nextParams;
+
+      if (!preserveHistory || !isSameChannel) {
+        resetPosEvents();
+      }
+      setPosStatus('Подключение к ActivePOS...', '');
+
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      try {
+        ws.send(JSON.stringify({
+          type: 'subscribe-pos-events',
+          params: posSubscriptionParams
+        }));
+      } catch (error) {
+        console.error('Ошибка подписки на ActivePOS:', error);
+        setPosStatus('Ошибка подключения ActivePOS', 'error');
+      }
+    }
+
+    // Отписка от событий ActivePOS
+    function unsubscribePosEvents({ sendCommand = true, keepHistory = false } = {}) {
+      if (sendCommand && ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'stop-pos-events' }));
+        } catch (error) {
+          console.warn('Ошибка при остановке ActivePOS:', error);
+        }
+      }
+
+      posSubscriptionParams = null;
+      if (!keepHistory) {
+        resetPosEvents();
+      }
+      const message = currentCameraGuid
+        ? 'ActivePOS отключен'
+        : 'Выберите камеру, чтобы увидеть чек в реальном времени';
+      setPosStatus(message, 'muted');
+    }
+
+    // Инициализация WebSocket
+    function initVideoWebSocket() {
+      if (ws) ws.close();
+      
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsHost = window.TRASSIR_WS_HOST || window.location.hostname || '192.168.1.12';
+      const wsPort = window.TRASSIR_WS_PORT ?? 8080;
+      const wsPortSuffix = wsPort ? `:${wsPort}` : '';
+      ws = new WebSocket(`${wsProtocol}://${wsHost}${wsPortSuffix}`);
+      ws.binaryType = 'arraybuffer';
+      
+      const status = document.getElementById('videoStatus');
+      
+      ws.onopen = () => {
+        console.log('✅ WebSocket подключен');
+        status.textContent = 'Подключение...';
+        status.className = '';
+        if (currentCameraGuid) {
+          try {
+            ws.send(JSON.stringify({ guid: currentCameraGuid }));
+          } catch (error) {
+            console.warn('Не удалось повторно запросить видео поток:', error);
+          }
+          subscribePosEvents(currentCameraGuid, { preserveHistory: true });
+        } else if (posSubscriptionParams?.channel) {
+          subscribePosEvents(posSubscriptionParams.channel, { preserveHistory: true });
+        } else {
+          setPosStatus('Выберите камеру, чтобы увидеть чек в реальном времени', 'muted');
+        }
+      };
+
+      ws.onmessage = event => {
+        const status = document.getElementById('videoStatus');
+
+        if (typeof event.data === 'string') {
+          let data;
+          try {
+            data = JSON.parse(event.data);
+          } catch (error) {
+            console.warn('Не удалось разобрать сообщение WebSocket:', error);
+            return;
+          }
+
+          // Список камер
+          if (data.type === 'cameras' && Array.isArray(data.data)) {
+            const cameras = data.data;
+            const select = document.getElementById('cameraSelect');
+            const options = cameras.map(c => `<option value="${c.guid}">${c.name || c.guid}</option>`).join('');
+            select.innerHTML = cameras.length ? options : '<option value="">Нет камер</option>';
+            
+            if (cameras.length > 0 && !currentCameraGuid) {
+              select.value = cameras[0].guid;
+              select.dispatchEvent(new Event('change'));
+            }
+            return;
+          }
+
+          // Информация о потоке
+          if (data.type === 'stream') {
+            if (data.mode === 'video' && data.streamId) {
+              startVideoPlayer(data);
+              return;
+            }
+            if (data.mode === 'pos-events') {
+              setPosStatus('ActivePOS подключен', 'success');
+              return;
+            }
+            return;
+          }
+
+          // События ActivePOS
+          if (data.type === 'pos-events' && Array.isArray(data.data)) {
+            if (data.data.length) {
+              const added = updatePosEvents(data.data);
+              const terminalCount = getActiveTerminalCount();
+              if (terminalCount > 0) {
+                const timestamp = new Date().toLocaleTimeString('ru-RU');
+                setPosStatus(`ActivePOS: ${terminalCount} касс · ${timestamp}`, 'success');
+              } else if (!added && !posEventsByTerminal.size) {
+                setPosStatus('Данные ActivePOS пока не получены', 'muted');
+              }
+            } else if (!posEventsByTerminal.size) {
+              setPosStatus('Данные ActivePOS пока не получены', 'muted');
+            }
+            return;
+          }
+
+          // Ошибки
+          if (data.error) {
+            const message = data.error || data.message || 'Неизвестная ошибка';
+            status.textContent = 'Ошибка: ' + message;
+            status.className = 'error';
+            if (posSubscriptionParams?.channel) {
+              setPosStatus(`Ошибка ActivePOS: ${message}`, 'error');
+            }
+            return;
+          }
+        }
+      };
+      
+      ws.onerror = () => {
+        stopVideoPlayer();
+        status.textContent = 'Ошибка подключения';
+        status.className = 'error';
+        if (posSubscriptionParams?.channel) {
+          setPosStatus('Соединение с ActivePOS потеряно', 'error');
+        }
+      };
+      
+      ws.onclose = () => {
+        stopVideoPlayer();
+        status.textContent = 'Соединение закрыто';
+        status.className = 'error';
+        if (posSubscriptionParams?.channel) {
+          setPosStatus('Соединение с ActivePOS потеряно', 'error');
+        }
+      };
+    }
+
+    // Выбор камеры
+    document.getElementById('cameraSelect').addEventListener('change', function() {
+      const guid = this.value || null;
+      currentCameraGuid = guid;
+
+      if (guid) {
+        subscribePosEvents(guid);
+      } else {
+        unsubscribePosEvents();
+      }
+
+      stopVideoPlayer();
+
+      const canvas = document.getElementById('videoCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const status = document.getElementById('videoStatus');
+
+      if (guid) {
+        status.textContent = (ws && ws.readyState === WebSocket.OPEN)
+          ? 'Переключение камеры...'
+          : 'Ожидание подключения WebSocket...';
+        status.className = '';
+
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          console.log('🔄 Переключение на камеру:', guid);
+          try {
+            ws.send(JSON.stringify({ guid }));
+          } catch (error) {
+            console.error('Ошибка отправки команды переключения камеры:', error);
+            status.textContent = 'Не удалось переключить камеру';
+            status.className = 'error';
+          }
+        }
+      } else {
+        status.textContent = 'Камера не выбрана';
+        status.className = 'error';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: 'stop' }));
+          } catch (error) {
+            console.warn('Ошибка при остановке видео потока:', error);
+          }
+        }
+      }
+    });
+
+    // Инициализация при загрузке
+    window.addEventListener('load', () => {
+      initVideoWebSocket();
+
+      posTerminalSelectEl = document.getElementById('posTerminalSelect');
+      if (posTerminalSelectEl) {
+        posTerminalSelectEl.addEventListener('change', event => {
+          selectedPosTerminal = event.target.value || '';
+          renderPosEvents();
+        });
+        updatePosTerminalSelectOptions();
+      }
+    });
+  </script>
+</body>
+</html>
+
+
