@@ -103,7 +103,6 @@ node server.js
 1. **FLV** (flash-формат) - приоритетный формат
 2. MJPEG
 3. RTSP
-4. JPEG скриншоты (fallback, ~5 FPS)
 
 ## Проблемы и решения
 

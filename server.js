@@ -314,15 +314,6 @@ class TrassirClient {
     return Buffer.from(response);
   }
 
-  async getScreenshotByPath(guid, options = {}) {
-    const response = await this.sdkRequest({
-      endpoint: `/screenshot/${guid}`,
-      params: options,
-      responseType: 'arraybuffer'
-    });
-    return Buffer.from(response);
-  }
-
   async getClassDescription(className) {
     return this.sdkRequest({ endpoint: `/classes/${encodeURIComponent(className)}` });
   }
@@ -656,71 +647,7 @@ function stopActiveStream(ws) {
     stopVideoStream(session.streamId);
   }
 
-  if (session.type === 'screenshot') {
-    if (typeof session.stop === 'function') {
-      session.stop();
-    } else if (session.timer) {
-      clearTimeout(session.timer);
-    }
-  }
-
   activeStreams.delete(ws);
-}
-
-async function startScreenshotStream(ws, guid) {
-  stopActiveStream(ws);
-
-  const FRAME_INTERVAL = Number(process.env.SCREENSHOT_INTERVAL || 66);
-  let cancelled = false;
-  let pending = false;
-
-  const loop = async () => {
-    if (cancelled || ws.readyState !== WebSocket.OPEN) {
-                  return;
-                }
-    if (pending) {
-      activeStreams.get(ws).timer = setTimeout(loop, FRAME_INTERVAL);
-      return;
-    }
-    pending = true;
-
-    try {
-      const buffer = await trassir.getScreenshotByPath(guid);
-      if (buffer?.length && ws.readyState === WebSocket.OPEN) {
-        ws.send(buffer);
-      }
-              } catch (error) {
-      if (Math.random() < 0.05) {
-        console.warn('⚠️ Ошибка скриншота:', error.message);
-      }
-    } finally {
-      pending = false;
-      const session = activeStreams.get(ws);
-      if (session && session.type === 'screenshot') {
-        session.timer = setTimeout(loop, FRAME_INTERVAL);
-      }
-    }
-  };
-
-  activeStreams.set(ws, {
-        type: 'screenshot', 
-    guid,
-    timer: setTimeout(loop, 0),
-        stop: () => {
-      cancelled = true;
-      pending = false;
-      const stored = activeStreams.get(ws);
-      if (stored && stored.timer) {
-        clearTimeout(stored.timer);
-      }
-    }
-  });
-            
-  ws.send(JSON.stringify({
-    type: 'stream',
-    mode: 'screenshot',
-    guid
-  }));
 }
 
 function hasActiveVideoSubscribers(stream) {
@@ -845,9 +772,7 @@ async function launchVideoStream(stream) {
     if (token) {
       stream.pingInterval = setInterval(async () => {
         try {
-          console.log(`Pinging token: ${token}`);
           await trassir.pingToken(token);
-          console.log(`Ping successful for token: ${token}`);
         } catch (error) {
           console.warn(`⚠️ Пинг не удался для ${token}: ${error.message}`);
           try {
@@ -1121,14 +1046,7 @@ wss.on('connection', async (ws) => {
 
     if (payload.type === 'subscribe' && payload.guid) {
       try {
-        const mode = payload.mode || process.env.DEFAULT_STREAM_MODE || 'auto';
-        if (mode === 'screenshot') {
-          await startScreenshotStream(ws, payload.guid);
-        } else if (mode === 'video') {
-          await startVideoStream(ws, payload.guid);
-        } else {
-          await startVideoStream(ws, payload.guid);
-        }
+        await startVideoStream(ws, payload.guid);
       } catch (error) {
         ws.send(JSON.stringify({
           type: 'error',
