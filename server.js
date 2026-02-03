@@ -433,7 +433,7 @@ function ensureFfmpegAvailable() {
     }
   }
 
-  console.warn('⚠️ FFmpeg не найден. Потоки FLV/MJPEG/RTSP будут недоступны, используется fallback (скриншоты)');
+  console.warn('⚠️ FFmpeg не найден. Потоки FLV/MJPEG/RTSP будут недоступны.');
   return false;
 }
 
@@ -637,35 +637,15 @@ function stopVideoStream(streamId) {
   }
 }
 
-async function fallbackVideoStreamToScreenshots(stream, error) {
-  if (!stream || stream.stopped) {
-    return;
-  }
-
-  const affectedSessions = [];
+function notifyVideoStreamErrorAndStop(stream, error) {
+  if (!stream || stream.stopped) return;
+  const message = error?.message || 'Видео поток недоступен';
   for (const [socket, session] of activeStreams.entries()) {
-    if (session.type === 'video' && session.streamId === stream.id) {
-      affectedSessions.push({ socket, guid: session.guid });
+    if (session.type === 'video' && session.streamId === stream.id && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'error', message, details: message }));
     }
   }
-
   stopVideoStream(stream.id);
-
-  for (const { socket, guid } of affectedSessions) {
-    try {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: 'error',
-          message: 'Ошибка видео потока, переключение на скриншоты',
-          details: error?.message
-        }));
-        // eslint-disable-next-line no-await-in-loop
-        await startScreenshotStream(socket, guid);
-      }
-    } catch (fallbackError) {
-      console.warn('⚠️ Ошибка переключения на скриншоты:', fallbackError.message);
-    }
-  }
 }
 
 function stopActiveStream(ws) {
@@ -777,7 +757,7 @@ function scheduleVideoStreamRestart(stream, reason, error) {
   const attempts = stream.restartAttempts || 0;
   if (attempts >= MAX_VIDEO_RESTARTS) {
     console.error(`❌ ${stream.guid}: превышено количество попыток перезапуска (${MAX_VIDEO_RESTARTS})`);
-    fallbackVideoStreamToScreenshots(stream, error);
+    notifyVideoStreamErrorAndStop(stream, error);
     return;
   }
 
@@ -1026,14 +1006,11 @@ async function startVideoStream(ws, guid) {
       console.warn('⚠️ Видео поток недоступен:', error.message);
       videoStreams.delete(videoStream.id);
       videoStreamsByGuid.delete(guid);
-      await startScreenshotStream(ws, guid);
-      if (Array.isArray(error.details)) {
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Видео поток недоступен, используется поток скриншотов',
-          details: error.details
-        }));
-      }
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Видео поток недоступен',
+        details: Array.isArray(error.details) ? error.details : error.message
+      }));
       return;
     } finally {
       videoStream.launching = null;
@@ -1047,14 +1024,11 @@ async function startVideoStream(ws, guid) {
     } catch (error) {
       console.warn('⚠️ Повторный запуск видео потока не удался:', error.message);
       stopVideoStream(videoStream.id);
-      await startScreenshotStream(ws, guid);
-      if (Array.isArray(error.details)) {
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Видео поток недоступен, используется поток скриншотов',
-          details: error.details
-        }));
-      }
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Видео поток недоступен',
+        details: Array.isArray(error.details) ? error.details : error.message
+      }));
       return;
     } finally {
       videoStream.launching = null;
@@ -1065,14 +1039,11 @@ async function startVideoStream(ws, guid) {
     } catch (error) {
       console.warn('⚠️ Ожидание текущего запуска видео потока завершилось ошибкой:', error.message);
       stopVideoStream(videoStream.id);
-      await startScreenshotStream(ws, guid);
-      if (Array.isArray(error.details)) {
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Видео поток недоступен, используется поток скриншотов',
-          details: error.details
-        }));
-      }
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Видео поток недоступен',
+        details: Array.isArray(error.details) ? error.details : error.message
+      }));
       return;
     }
   }

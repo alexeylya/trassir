@@ -242,8 +242,8 @@
           }
 
           // Ошибки
-          if (data.error) {
-            const message = data.error || data.message || 'Неизвестная ошибка';
+          if (data.type === 'error' || data.error) {
+            const message = data.message || data.error || 'Неизвестная ошибка';
             status.textContent = 'Ошибка: ' + message;
             status.className = 'error';
             return;
