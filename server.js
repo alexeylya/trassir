@@ -40,7 +40,6 @@ const MAX_VIDEO_RESTARTS = Number(process.env.FFMPEG_MAX_RESTARTS || 5);
 const VIDEO_RESTART_DELAY_MS = Number(process.env.FFMPEG_RESTART_DELAY || 2000);
 const VIDEO_INACTIVITY_TIMEOUT_MS = Number(process.env.FFMPEG_INACTIVITY_TIMEOUT || 60000);
 const VIDEO_INACTIVITY_GRACE_ON_RECONNECT_MS = Number(process.env.FFMPEG_INACTIVITY_GRACE_ON_RECONNECT || 15000);
-const POS_EVENTS_POLL_INTERVAL_MS = Number(process.env.POS_EVENTS_POLL_INTERVAL || 1000);
 
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
@@ -302,46 +301,6 @@ class TrassirClient {
     return this.sdkRequest({ endpoint: '/events', params });
   }
 
-  async getActivePosEvents(params = {}) {
-    return this.sdkRequest({
-      endpoint: '/pos_events',
-      params: { ...params, password: this.sdkPassword },
-      sidType: null,
-      allowPasswordFallback: false
-    });
-  }
-
-  async getPosTerminals() {
-    const response = await this.sdkRequest({ endpoint: '/objects/', sidType: 'user' });
-    const list = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : [];
-    return list
-      .filter(obj => obj?.class === 'PosTerminal')
-      .map(obj => ({
-        guid: obj.guid,
-        name: obj.name || obj.guid,
-        channel: obj.channel,
-        ip: obj.ip,
-        port: obj.port,
-        raw: obj
-      }));
-  }
-
-  async searchPosReceipts(params = {}) {
-    return this.sdkRequest({
-      endpoint: '/pos_receipts',
-      params: { ...params, format: params.format || 'json' },
-      sidType: 'user'
-    });
-  }
-
-  async getPosReport(params = {}) {
-    return this.sdkRequest({
-      endpoint: '/pos_report',
-      params: { ...params, format: params.format || 'json' },
-      sidType: 'user'
-    });
-  }
-
   async getLprEvents(params = {}) {
     return this.sdkRequest({ endpoint: '/lpr_events', params });
   }
@@ -490,217 +449,6 @@ const trassir = new TrassirClient({
   axios: axiosInstance
 });
 
-const POS_TERMINAL_CACHE_TTL_MS = Number(process.env.POS_TERMINAL_CACHE_TTL_MS || 30000);
-const CHANNEL_CACHE_TTL_MS = Number(process.env.CHANNEL_CACHE_TTL_MS || 60000);
-
-const posTerminalChannelCache = new Map();
-const channelTerminalCache = new Map();
-const channelAliasTerminalCache = new Map();
-const channelInfoCache = new Map();
-const channelNameCache = new Map();
-
-let posTerminalCacheExpiresAt = 0;
-let channelCacheExpiresAt = 0;
-
-function normalizeName(value) {
-  if (value === null || value === undefined) {
-    return '';
-  }
-  return String(value).trim().toLowerCase();
-}
-
-function extractTrassirGuid(value) {
-  if (!value) {
-    return null;
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (/^[A-Za-z0-9_-]{8,}$/.test(trimmed)) {
-      return trimmed;
-    }
-    const match = trimmed.match(/([A-Za-z0-9_-]{8,})$/);
-    if (match) {
-      return match[1];
-    }
-    return null;
-  }
-  if (typeof value === 'object') {
-    return extractTrassirGuid(value.guid || value.id || value.value);
-  }
-  return null;
-}
-
-function mapAddUniqueArrayEntry(map, key, value) {
-  if (!key || !value) {
-    return;
-  }
-  const list = map.get(key);
-  if (list) {
-    if (!list.includes(value)) {
-      list.push(value);
-    }
-  } else {
-    map.set(key, [value]);
-  }
-}
-
-async function refreshChannelCache(force = false) {
-  const now = Date.now();
-  if (!force && channelCacheExpiresAt > now && channelInfoCache.size) {
-    return;
-  }
-
-  try {
-    const channels = await trassir.getChannels();
-    channelInfoCache.clear();
-    channelNameCache.clear();
-
-    for (const channel of channels) {
-      const guid = extractTrassirGuid(channel?.guid);
-      if (!guid) {
-        continue;
-      }
-
-      channelInfoCache.set(guid, channel);
-      const aliases = new Set([
-        channel?.name,
-        channel?.full_name,
-        channel?.fullname,
-        channel?.title,
-        channel?.display_name,
-        channel?.displayName,
-        channel?.node_name
-      ]);
-
-      for (const alias of aliases) {
-        const normalized = normalizeName(alias);
-        if (!normalized) {
-          continue;
-        }
-        if (!channelNameCache.has(normalized)) {
-          channelNameCache.set(normalized, guid);
-        }
-      }
-    }
-
-    channelCacheExpiresAt = now + CHANNEL_CACHE_TTL_MS;
-  } catch (error) {
-    channelCacheExpiresAt = now + CHANNEL_CACHE_TTL_MS;
-    console.warn('⚠️ Не удалось обновить кэш каналов TRASSIR:', error.message);
-  }
-}
-
-async function refreshPosTerminalCache(force = false) {
-  const now = Date.now();
-  if (!force && posTerminalCacheExpiresAt > now && posTerminalChannelCache.size) {
-    return;
-  }
-  try {
-    await refreshChannelCache();
-    const terminals = await trassir.getPosTerminals();
-    posTerminalChannelCache.clear();
-    channelTerminalCache.clear();
-    channelAliasTerminalCache.clear();
-    for (const terminal of terminals) {
-      if (!terminal?.guid) {
-        continue;
-      }
-      const aliases = [
-        terminal.raw?.channel_name,
-        terminal.raw?.channel_title,
-        terminal.raw?.channel_display_name,
-        terminal.raw?.channel_fullname,
-        terminal.name,
-        terminal.raw?.name
-      ]
-        .map(normalizeName)
-        .filter(Boolean);
-
-      let channel = extractTrassirGuid(
-        terminal.channel ??
-        terminal.raw?.channel ??
-        terminal.raw?.channel_guid ??
-        terminal.raw?.video_channel ??
-        terminal.raw?.camera
-      );
-
-      if (!channel) {
-        for (const alias of aliases) {
-          const candidate = channelNameCache.get(alias);
-          if (candidate) {
-            channel = candidate;
-            break;
-          }
-        }
-      }
-
-      posTerminalChannelCache.set(terminal.guid, channel || null);
-      if (channel) {
-        mapAddUniqueArrayEntry(channelTerminalCache, channel, terminal.guid);
-      }
-
-      for (const alias of aliases) {
-        mapAddUniqueArrayEntry(channelAliasTerminalCache, alias, terminal.guid);
-        const candidateGuid = channelNameCache.get(alias);
-        if (candidateGuid) {
-          mapAddUniqueArrayEntry(channelTerminalCache, candidateGuid, terminal.guid);
-          if (!channel && candidateGuid) {
-            channel = candidateGuid;
-            posTerminalChannelCache.set(terminal.guid, channel);
-          }
-        }
-      }
-    }
-    posTerminalCacheExpiresAt = now + POS_TERMINAL_CACHE_TTL_MS;
-  } catch (error) {
-    posTerminalCacheExpiresAt = now + POS_TERMINAL_CACHE_TTL_MS;
-    console.warn('⚠️ Не удалось обновить кэш терминалов ActivePOS:', error.message);
-  }
-}
-
-async function resolvePosTerminalChannel(terminalGuid) {
-  if (!terminalGuid) {
-    return null;
-  }
-  await refreshPosTerminalCache();
-  return posTerminalChannelCache.get(terminalGuid) || null;
-}
-
-async function resolveChannelPrimaryTerminal(channelGuid) {
-  if (!channelGuid) {
-    return null;
-  }
-  await refreshPosTerminalCache();
-  const candidates = channelTerminalCache.get(channelGuid);
-  if (Array.isArray(candidates) && candidates.length > 0) {
-    return candidates[0] || null;
-  }
-
-  const channelInfo = channelInfoCache.get(channelGuid);
-  if (channelInfo) {
-    const aliases = [
-      channelInfo?.name,
-      channelInfo?.full_name,
-      channelInfo?.fullname,
-      channelInfo?.title,
-      channelInfo?.display_name,
-      channelInfo?.displayName,
-      channelInfo?.node_name
-    ]
-      .map(normalizeName)
-      .filter(Boolean);
-
-    for (const alias of aliases) {
-      const aliasCandidates = channelAliasTerminalCache.get(alias);
-      if (Array.isArray(aliasCandidates) && aliasCandidates.length > 0) {
-        return aliasCandidates[0] || null;
-      }
-    }
-  }
-
-  return null;
-}
-
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
@@ -749,10 +497,6 @@ app.get('/api/events', handleRoute(async (req) => {
   return trassir.getEvents(req.query);
 }));
 
-app.get('/api/pos-events', handleRoute(async (req) => {
-  return trassir.getActivePosEvents(req.query);
-}));
-
 app.get('/api/lpr-events', handleRoute(async (req) => {
   return trassir.getLprEvents(req.query);
 }));
@@ -764,18 +508,6 @@ app.get('/api/settings', handleRoute(async (req) => {
 app.post('/api/settings', handleRoute(async (req) => {
   const { path: settingPath, value } = req.body;
   return trassir.setSetting(settingPath, value);
-}));
-
-app.get('/api/pos-terminals', handleRoute(async () => {
-  return trassir.getPosTerminals();
-}));
-
-app.get('/api/pos-receipts', handleRoute(async (req) => {
-  return trassir.searchPosReceipts(req.query);
-}));
-
-app.get('/api/pos-report', handleRoute(async (req) => {
-  return trassir.getPosReport(req.query);
 }));
 
 app.get('/api/archive/:guid', handleRoute(async (req) => {
@@ -823,7 +555,6 @@ console.log(`✅ WebSocket сервер запущен на порту ${WS_PORT
 const activeStreams = new Map();
 const videoStreams = new Map();
 const videoStreamsByGuid = new Map();
-const posEventStreams = new Map();
 
 function generateStreamId(guid) {
   return `${guid || 'stream'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1010,185 +741,6 @@ async function startScreenshotStream(ws, guid) {
     mode: 'screenshot',
     guid
   }));
-}
-
-function stopPosEventsStream(ws) {
-  const session = posEventStreams.get(ws);
-  if (!session) {
-    return;
-  }
-
-  session.cancelled = true;
-  if (session.timer) {
-    clearTimeout(session.timer);
-  }
-  posEventStreams.delete(ws);
-}
-
-async function startPosEventsStream(ws, params = {}) {
-  stopPosEventsStream(ws);
-
-  const state = {
-    cancelled: false,
-    pending: false,
-    timer: null,
-    lastLogAt: 0,
-    lastEventTimestamp: Number(params.lastEventTimestamp) || 0,
-    boundTerminal: null
-  };
-
-  posEventStreams.set(ws, state);
-
-  const rawInterval = Number(params.pollInterval);
-  const pollIntervalBase = Number.isFinite(rawInterval) && rawInterval >= 0
-    ? rawInterval
-    : POS_EVENTS_POLL_INTERVAL_MS;
-  const pollInterval = Math.max(pollIntervalBase, 100);
-  const requestParams = { ...params };
-  delete requestParams.pollInterval;
-  delete requestParams.lastEventTimestamp;
-
-  let preferredChannel = requestParams.channel || null;
-  if (!preferredChannel && requestParams.terminal) {
-    preferredChannel = await resolvePosTerminalChannel(requestParams.terminal);
-    if (preferredChannel) {
-      console.log(`🔗 ActivePOS: терминал ${requestParams.terminal} связан с каналом ${preferredChannel}`);
-    } else {
-      console.warn(`⚠️ ActivePOS: не удалось определить канал для терминала ${requestParams.terminal}`);
-    }
-  }
-
-  if (!requestParams.terminal && preferredChannel) {
-    const derivedTerminal = await resolveChannelPrimaryTerminal(preferredChannel);
-    if (derivedTerminal) {
-      requestParams.terminal = derivedTerminal;
-      console.log(`🔗 ActivePOS: канал ${preferredChannel} связан с терминалом ${derivedTerminal}`);
-    } else {
-      console.warn(`⚠️ ActivePOS: не удалось определить терминал для канала ${preferredChannel}`);
-    }
-  }
-
-  state.boundChannel = preferredChannel || null;
-  state.boundTerminal = requestParams.terminal || null;
-
-  // Получаем события для всех терминалов, фильтрация выполняется на клиенте
-  if (requestParams.terminal) {
-    delete requestParams.terminal;
-  }
-
-  const activeVideoSession = activeStreams.get(ws);
-  if (preferredChannel) {
-    const sameVideo =
-      activeVideoSession &&
-      activeVideoSession.type === 'video' &&
-      activeVideoSession.guid === preferredChannel;
-    if (!sameVideo) {
-      try {
-        console.log(`🎥 ActivePOS: автозапуск видео для канала ${preferredChannel}`);
-        await startVideoStream(ws, preferredChannel);
-      } catch (error) {
-        console.warn(`⚠️ ActivePOS: не удалось запустить видео для канала ${preferredChannel}: ${error.message}`);
-      }
-    }
-  }
-
-  console.log('🧾 ActivePOS: подписка оформлена', {
-    ...requestParams,
-    channel: requestParams.channel || preferredChannel,
-    pollInterval,
-    lastEventTimestamp: state.lastEventTimestamp
-  });
-
-  const poll = async () => {
-    if (state.cancelled || ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-
-    if (state.pending) {
-      state.timer = setTimeout(poll, pollInterval);
-      return;
-    }
-
-    state.pending = true;
-    try {
-      const response = await trassir.getActivePosEvents(requestParams);
-      const events = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : [];
-
-      const processed = events
-        .map(event => ({ event, ts: Number(event?.event_timestamp || event?.timestamp) }))
-        .filter(item => {
-          if (!Number.isFinite(item.ts)) {
-            return true;
-          }
-          return item.ts > state.lastEventTimestamp;
-        })
-        .sort((a, b) => {
-          if (!Number.isFinite(a.ts) && !Number.isFinite(b.ts)) return 0;
-          if (!Number.isFinite(a.ts)) return -1;
-          if (!Number.isFinite(b.ts)) return 1;
-          return a.ts - b.ts;
-        })
-        .map(item => item.event);
-
-      if (processed.length && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'pos-events',
-          data: processed
-        }));
-
-        const maxTs = processed.reduce((max, event) => {
-          const ts = Number(event?.event_timestamp || event?.timestamp);
-          if (!Number.isFinite(ts)) {
-            return max;
-          }
-          return Math.max(max, ts);
-        }, state.lastEventTimestamp || 0);
-        if (Number.isFinite(maxTs) && maxTs > state.lastEventTimestamp) {
-          state.lastEventTimestamp = maxTs;
-        }
-      }
-
-      const now = Date.now();
-      const shouldLog =
-        processed.length > 0 ||
-        now - state.lastLogAt >= Math.max(pollInterval * 10, 10_000);
-      if (shouldLog) {
-        state.lastLogAt = now;
-        console.log('🧾 ActivePOS: ответ', {
-          scope: 'all-terminals',
-          eventsTotal: events.length,
-          eventsSent: processed.length,
-          lastEventTimestamp: state.lastEventTimestamp || null,
-          pollInterval
-        });
-      }
-    } catch (error) {
-      console.error('❌ Ошибка получения POS событий:', error.message);
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Не удалось получить события ActivePOS',
-          details: error.message
-        }));
-      }
-    } finally {
-      state.pending = false;
-      if (!state.cancelled) {
-        state.timer = setTimeout(poll, pollInterval);
-      }
-    }
-  };
-
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'stream',
-      mode: 'pos-events',
-      params: { ...requestParams, channel: requestParams.channel || preferredChannel },
-      lastEventTimestamp: state.lastEventTimestamp
-    }));
-  }
-
-  poll();
 }
 
 function hasActiveVideoSubscribers(stream) {
@@ -1542,14 +1094,12 @@ wss.on('connection', async (ws) => {
 
   ws.on('close', () => {
     stopActiveStream(ws);
-    stopPosEventsStream(ws);
     console.log('❌ WebSocket клиент отключился');
   });
 
   ws.on('error', (error) => {
     console.error('❌ WebSocket ошибка:', error.message);
     stopActiveStream(ws);
-    stopPosEventsStream(ws);
   });
 
   // Отправляем список камер сразу после подключения
@@ -1615,22 +1165,8 @@ wss.on('connection', async (ws) => {
           details: error.message
         }));
       }
-    } else if (payload.type === 'subscribe-pos-events') {
-      try {
-        await startPosEventsStream(ws, payload.params || {});
-      } catch (error) {
-        console.error('❌ Ошибка запуска потока POS событий:', error.message);
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: 'Не удалось запустить поток ActivePOS',
-          details: error.message
-        }));
-      }
-    } else if (payload.type === 'stop-pos-events' || payload.type === 'unsubscribe-pos-events') {
-      stopPosEventsStream(ws);
     } else if (payload.type === 'stop') {
       stopActiveStream(ws);
-      stopPosEventsStream(ws);
     } else {
       ws.send(JSON.stringify({ type: 'error', message: 'Неизвестная команда' }));
     }
