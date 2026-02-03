@@ -70,14 +70,7 @@
       display: block;
       margin: 10px auto;
     }
-    .live-layout {
-      display: flex;
-      gap: 20px;
-      align-items: flex-start;
-      flex-wrap: wrap;
-    }
     .video-wrapper {
-      flex: 1;
       min-width: 320px;
     }
     .error {
@@ -128,7 +121,7 @@
       const canvas = document.getElementById('videoCanvas');
       const status = document.getElementById('videoStatus');
 
-      const JSMpegLib = typeof JSMpeg !== 'undefined' ? JSMpeg : (typeof window.JSMpeg !== 'undefined' ? window.JSMpeg : null);
+      const JSMpegLib = window.JSMpeg || null;
       if (!JSMpegLib || typeof JSMpegLib.Player !== 'function') {
         console.error('❌ JSMpeg.Player недоступен');
         stopVideoPlayer();
@@ -235,8 +228,8 @@
             return;
           }
 
-          // Информация о потоке
-          if (data.type === 'stream' && data.mode === 'video' && data.streamId) {
+          // Информация о потоке (сервер отдаёт только video)
+          if (data.type === 'stream' && data.streamId) {
             startVideoPlayer(data);
             return;
           }
@@ -315,5 +308,3 @@
   </script>
 </body>
 </html>
-
-

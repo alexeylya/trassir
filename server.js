@@ -79,7 +79,7 @@ function createError(message, cause) {
   return error;
 }
 
-// === SID CACHE ==============================================================
+// === SID CACHE ===
 
 class SidCache {
   constructor(fetcher, ttlMs = 14 * 60 * 1000) {
